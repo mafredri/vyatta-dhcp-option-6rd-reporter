@@ -1,0 +1,11 @@
+Package: dhcp-option-6rd-reporter
+Source: dhcp-option-6rd-reporter
+Version: PACKAGE_VERSION-PACKAGE_RELEASE
+Architecture: PACKAGE_ARCH
+Maintainer: Mathias Fredriksson <mafredri@gmail.com>
+Section: net
+Depends: dhcp-global-option
+Homepage: https://github.com/mafredri/vyatta-dhcp-option-6rd-reporter
+Description: Report IPv6 6RD configuration from UniFi Security Gateway
+ Report IPv6 6RD configuration, received via IPv4 DHCP (OPTION_6RD),
+ from UniFi Security Gateway to the UniFi controller.

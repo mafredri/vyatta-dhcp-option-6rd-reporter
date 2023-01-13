@@ -1,0 +1,99 @@
+#!/bin/bash
+
+# dhcp-option-6rd-reporter
+# This script uses mca-ctrl to notify the UniFi Controller about updated
+# IPv6 6RD configuration, received via DHCP (IPv4).
+
+REPORT_JSON=/var/run/dhclient_${interface}_option_6rd_reporter.json
+NAME=dhcp-event
+EVENT_STRING=EVT_GW_DHCP6RD
+
+info() {
+	logger -t $NAME -- "[DHCP 6RD] $*"
+}
+
+report() {
+	local reason=$1 interface=$2 ip=$3 option=$4
+
+	info "$reason: IPv6 for IF=${interface} IP=${ip} OPTION_6RD=\"${option}\""
+
+	if ! [[ -x /usr/bin/mca-ctrl ]]; then
+		return
+	fi
+
+	# Create the JSON and keep it around because sometimes messages
+	# are sent after mca-ctrl has exited, in which case we might see
+	# errors like:
+	#
+	#     mcad[3934]: ace_reporter.reporter_custom_alert_payload_file():
+	#         reporter_custom_alert_payload_file:
+	#             failed to load json file (line -1: unable to open /tmp/output.WRopNs: No such file or directory)
+	#
+	# This structure mimics /usr/bin/mca-custom-alert.sh.
+	cat <<EOF >"$REPORT_JSON"
+{
+	"event_string": "$EVENT_STRING",
+	"interface": "$interface",
+	"local_ip": "$ip",
+	"option_6rd": "$option",
+	"reason": "$reason"
+}
+EOF
+
+	# Fork this process so that we don't delay other scripts.
+	{
+		# For some reason, mcad does not send our message during
+		# device provision unless we delay here. The 15 seconds
+		# was chosen for stability as 10 seconds also worked but
+		# 5 seconds was too little.
+		sleep 15
+
+		# When the device is rebooted we need to make sure mcad
+		# is running before sending the report.
+		while ! [[ -e /tmp/.mcad ]]; do
+			sleep 1
+		done
+		sleep 1
+
+		# Send the report and keep trying if it fails.
+		while ! mca-ctrl -t event -f "$REPORT_JSON"; do
+			sleep 1
+		done
+	} &
+	disown
+}
+
+# Disable shellcheck for variables that are referenced, but unassigned.
+# We rely on dhclient to provide these for us.
+# shellcheck disable=SC2154
+case $reason in
+BOUND |  REBOOT)
+	if [[ -z $new_option_6rd ]]; then
+		info "$reason: missing OPTION_6RD, nothing to do..."
+		return 0
+	fi
+
+	report "$reason" "$interface" "$new_ip_address" "$new_option_6rd"
+	;;
+RENEW |  REBIND)
+	if [[ -z $new_option_6rd ]]; then
+		# This could mean that the DHCP server no longer
+		# provides the 6RD option, but we probably don't
+		# need to figure it out, worst case, IPv6 stops
+		# working.
+		info "$reason: missing OPTION_6RD, nothing to do..."
+		return 0
+	fi
+	if [[ $new_option_6rd == "$old_option_6rd" ]] && [[ $new_ip_address == "$old_ip_address" ]]; then
+		return 0
+	fi
+
+	report "$reason" "$interface" "$new_ip_address" "$new_option_6rd"
+	;;
+MEDIUM |  PREINIT | EXPIRE | FAIL | STOP | RELEASE | NBI | TIMEOUT)
+	# Do nothing.
+	;;
+*)
+	info "unhandled event \"${reason}\""
+	;;
+esac
